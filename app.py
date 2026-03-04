@@ -340,8 +340,7 @@ with tab3:
                     # Sort by amount descending
                     month_summary = month_summary.sort_values('amount', ascending=False)
                     # Add Total row
-                    total_row = pd.DataFrame([{'category': 'TOTAL', 'amount': month_summary['amount'].sum()}])
-                    month_summary = pd.concat([month_summary, total_row], ignore_index=True)
+                    month_summary.loc[len(month_summary)] = {'category': 'TOTAL', 'amount': month_summary['amount'].sum()}
                     month_summary.to_excel(writer, sheet_name=month, index=False)
                 
                 # Monthly Totals Sheet
@@ -349,9 +348,8 @@ with tab3:
                 # Sort by amount descending
                 monthly_totals = monthly_totals.sort_values('amount', ascending=False)
                 # Add Grand Total
-                grand_monthly_total = pd.DataFrame([{'Month': 'GRAND TOTAL', 'amount': monthly_totals['amount'].sum()}])
-                monthly_totals_final = pd.concat([monthly_totals, grand_monthly_total], ignore_index=True)
-                monthly_totals_final.to_excel(writer, sheet_name="Monthly Totals", index=False)
+                monthly_totals.loc[len(monthly_totals)] = {'Month': 'GRAND TOTAL', 'amount': monthly_totals['amount'].sum()}
+                monthly_totals.to_excel(writer, sheet_name="Monthly Totals", index=False)
                 
                 # Average Monthly Expenses Sheet
                 avg_export_df = avg_monthly_expenses[['category', 'average_per_month']].copy()
@@ -368,17 +366,15 @@ with tab3:
                 
                 # Add Total row for each year column
                 pivot_totals = yearly_pivot_sorted.select_dtypes(include=['number']).sum()
-                total_pivot_row = pd.DataFrame(pivot_totals).T
-                total_pivot_row['category'] = 'TOTAL'
-                yearly_pivot_final = pd.concat([yearly_pivot_sorted, total_pivot_row], ignore_index=True)
-                yearly_pivot_final.to_excel(writer, sheet_name="Yearly Comparison", index=False)
+                pivot_totals['category'] = 'TOTAL'
+                yearly_pivot_sorted.loc[len(yearly_pivot_sorted)] = pivot_totals
+                yearly_pivot_sorted.to_excel(writer, sheet_name="Yearly Comparison", index=False)
                 
                 # Yearly Summary Sheet (Grouped by Year, Sort by amount descending within year)
                 yearly_summary_sorted = yearly_summary.sort_values(['Year', 'amount'], ascending=[False, False])
                 # Add overall Total row
-                grand_total_row = pd.DataFrame([{'Year': 'GRAND TOTAL', 'category': '-', 'amount': yearly_summary_sorted['amount'].sum()}])
-                yearly_summary_final = pd.concat([yearly_summary_sorted, grand_total_row], ignore_index=True)
-                yearly_summary_final.to_excel(writer, sheet_name="Yearly Summary", index=False)
+                yearly_summary_sorted.loc[len(yearly_summary_sorted)] = {'Year': 'GRAND TOTAL', 'category': '-', 'amount': yearly_summary_sorted['amount'].sum()}
+                yearly_summary_sorted.to_excel(writer, sheet_name="Yearly Summary", index=False)
 
                 # Configured Categories Sheet
                 category_to_keywords = {}
