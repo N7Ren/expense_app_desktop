@@ -19,7 +19,28 @@ from PySide6.QtWidgets import (
 from categorizer import Categorizer
 from expense_data import ExpenseDataStore
 from parser import Parser
+from receipt_analysis import extract_receipt_text
+from receipts import ReceiptStore
 from scanner import Scanner
+
+
+def display_amount(value):
+    """Format numeric amounts while accepting already formatted display values safely."""
+    if isinstance(value, str):
+        raw = value.strip()
+        numeric = raw.replace("€", "").replace(" ", "")
+        if "," in numeric and "." in numeric:
+            numeric = numeric.replace(".", "").replace(",", ".") if numeric.rfind(",") > numeric.rfind(".") else numeric.replace(",", "")
+        elif "," in numeric:
+            numeric = numeric.replace(",", ".")
+        try:
+            return f"{float(numeric):.2f} €"
+        except ValueError:
+            return raw
+    try:
+        return f"{float(value):.2f} €"
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def statistics_for_categories(totals, categories):
@@ -164,7 +185,7 @@ class DataFrameModel(QAbstractTableModel):
         if role == Qt.EditRole:
             return str(value)
         if column == "Amount":
-            return f"{float(value):.2f} €"
+            return display_amount(value)
         if column == "Date" and hasattr(value, "strftime"):
             return value.strftime("%Y-%m-%d")
         return str(value)
@@ -173,6 +194,24 @@ class DataFrameModel(QAbstractTableModel):
         if role == Qt.DisplayRole and orientation == Qt.Horizontal:
             return self.columns[section]
         return super().headerData(section, orientation, role)
+
+
+class ReceiptAnalysisDialog(QDialog):
+    """Read-only receipt analysis that leaves all transactions unchanged."""
+
+    def __init__(self, parent, file_name, path):
+        super().__init__(parent)
+        self.setWindowTitle(f"Analyze receipt: {file_name}")
+        self.resize(720, 500)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Extracted text (local only):"))
+        text, status = extract_receipt_text(path)
+        status_label = QLabel(status); status_label.setWordWrap(True)
+        layout.addWidget(status_label)
+        text_view = QTextEdit(); text_view.setReadOnly(True)
+        text_view.setPlainText(text or "No text available for this receipt.")
+        layout.addWidget(text_view, 1)
+        close = QPushButton("Close"); close.clicked.connect(self.accept); layout.addWidget(close)
 
 
 class RuleTableModel(DataFrameModel):
@@ -232,6 +271,7 @@ class ExpenseWindow(QMainWindow):
         super().__init__()
         self.scanner, self.parser, self.categorizer = Scanner(), Parser(), Categorizer()
         self.store = ExpenseDataStore(self.scanner, self.parser, self.categorizer)
+        self.receipts = ReceiptStore()
         self.page, self.sort_column, self.sort_descending = 1, "date", True
         self.setWindowTitle("Expense App Desktop")
         self.resize(1300, 820)
@@ -243,6 +283,7 @@ class ExpenseWindow(QMainWindow):
         tabs.addTab(self._transaction_tab(), "Transactions")
         tabs.addTab(self._category_tab(), "Categories")
         tabs.addTab(self._statistics_tab(), "Statistics")
+        tabs.addTab(self._receipts_tab(), "Receipts")
         self.setCentralWidget(tabs)
         refresh = QAction("Reload CSVs", self)
         refresh.triggered.connect(self.reload_folder_csvs)
@@ -342,6 +383,81 @@ class ExpenseWindow(QMainWindow):
         export_selection_layout.addLayout(selection_controls)
         layout.addWidget(export_selection, 1)
         export = QPushButton("Export selected categories yearly report to Excel…"); export.clicked.connect(self.export_statistics); layout.addWidget(export); return page
+
+    def _receipts_tab(self):
+        page = QWidget(); layout = QVBoxLayout(page)
+        layout.addWidget(QLabel("Upload PDFs or receipt images. Files are stored locally in this app's data folder; no OCR or bookings are created."))
+        controls = QHBoxLayout()
+        upload = QPushButton("Upload receipt files…")
+        upload.clicked.connect(self.choose_receipt_files)
+        self.analyze_receipt_button = QPushButton("Analyze selected receipt")
+        self.analyze_receipt_button.setEnabled(False)
+        self.analyze_receipt_button.clicked.connect(self.analyze_selected_receipt)
+        controls.addWidget(upload); controls.addWidget(self.analyze_receipt_button); controls.addStretch(); layout.addLayout(controls)
+        self.receipt_status = QLabel("No receipt files uploaded yet.")
+        self.receipt_status.setWordWrap(True)
+        layout.addWidget(self.receipt_status)
+        self.receipt_model = DataFrameModel(["File name", "Type", "Uploaded", "Size"], self)
+        self.receipt_table = QTableView(); self.receipt_table.setModel(self.receipt_model)
+        self.receipt_table.setEditTriggers(QTableView.NoEditTriggers)
+        self.receipt_table.setSelectionBehavior(QTableView.SelectRows)
+        receipt_header = self.receipt_table.horizontalHeader()
+        receipt_header.setSectionResizeMode(0, QHeaderView.Stretch)
+        for column in range(1, self.receipt_model.columnCount()):
+            receipt_header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        self.receipt_table.selectionModel().selectionChanged.connect(self._update_receipt_actions)
+        layout.addWidget(self.receipt_table, 1)
+        self.refresh_receipts()
+        return page
+
+    def choose_receipt_files(self):
+        filters = "Receipt files (*.pdf *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff)"
+        files, _ = QFileDialog.getOpenFileNames(self, "Upload receipt files", "", filters)
+        if files:
+            self.import_receipt_files(files)
+
+    def import_receipt_files(self, files):
+        result = self.receipts.import_files(files)
+        self.refresh_receipts()
+        messages = []
+        if result["imported"]:
+            messages.append(f"Uploaded {len(result['imported'])} receipt file(s).")
+        if result["skipped"]:
+            messages.append("; ".join(result["skipped"]))
+        if result["failed"]:
+            messages.append("; ".join(result["failed"]))
+        if result["failed"]:
+            self.receipt_status.setStyleSheet("color: #a11;")
+        elif result["imported"]:
+            self.receipt_status.setStyleSheet("color: #1f7a1f;")
+        else:
+            self.receipt_status.setStyleSheet("")
+        if messages:
+            self.receipt_status.setText(" ".join(messages))
+        return result
+
+    def refresh_receipts(self):
+        self.receipt_entries = self.receipts.list_receipts()
+        self.receipt_model.set_frame(pd.DataFrame(self.receipt_entries, columns=self.receipt_model.columns))
+        self._update_receipt_actions()
+        if not self.receipt_entries and not self.receipt_status.text():
+            self.receipt_status.setText("No receipt files uploaded yet.")
+
+    def _update_receipt_actions(self, *_):
+        selected = self.receipt_table.selectionModel().selectedRows()
+        self.analyze_receipt_button.setEnabled(len(selected) == 1)
+
+    def analyze_selected_receipt(self):
+        selected = self.receipt_table.selectionModel().selectedRows()
+        if len(selected) != 1:
+            return
+        entry = self.receipt_entries[selected[0].row()]
+        path = self.receipts.receipt_path(entry)
+        if path is None:
+            self.receipt_status.setStyleSheet("color: #a11;")
+            self.receipt_status.setText("The stored receipt file could not be found.")
+            return
+        ReceiptAnalysisDialog(self, entry["File name"], path).exec()
 
     def choose_csv_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Import bank statements", "", "CSV files (*.csv)")

@@ -34,6 +34,16 @@ class TestStatisticsExportSelection(unittest.TestCase):
 
         self.assertTrue(statistics_for_categories(totals, []).empty)
 
+    def test_amount_display_handles_numbers_and_existing_currency_text(self):
+        from desktop_app import DataFrameModel
+
+        model = DataFrameModel(["Amount"])
+        model.set_frame(pd.DataFrame({"Amount": [20.0, "20.00 €", "20,50 €", "not available"]}))
+
+        self.assertEqual(model.data(model.index(0, 0)), "20.00 €")
+        self.assertEqual(model.data(model.index(1, 0)), "20.00 €")
+        self.assertEqual(model.data(model.index(2, 0)), "20.50 €")
+        self.assertEqual(model.data(model.index(3, 0)), "not available")
 @unittest.skipIf(pd is None, "pandas is not installed")
 class TestYearlyStatisticsExport(unittest.TestCase):
 

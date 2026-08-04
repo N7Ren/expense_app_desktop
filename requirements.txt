@@ -1,5 +1,7 @@
 ﻿PySide6
 pdfplumber
+pytesseract
+pypdfium2
 pandas
 watchdog
 openpyxl
